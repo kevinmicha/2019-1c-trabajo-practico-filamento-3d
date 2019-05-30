@@ -32,35 +32,43 @@
 ;	Inicializo el LDC para interfaz de 4 bits.
 ;--------------------------------------------------------------------
 LCD_INI:
-			ldi		t1,50			; espero 40 mS
-			rcall	DELAY_mS		
+			ldi		t1,200			; espero 40 mS
+			rcall	DELAY_mS
+			ldi		t1,200			; espero 40 mS
+			rcall	DELAY_mS			
 
 			;	CONFIG_DISPLAY				; 2 líneas, 4 bits y 5x8 dots		
 			ldi		lcd_data,	CONF_LCD|(1<<LINE)|(0<<BITS)|(0<<FONT)
 			rcall	WR_NIB_H_COMM
-			ldi		t1,50
+			ldi		t1,200
+			rcall	delay_us
+			ldi		t1,200
 			rcall	delay_us
 			ldi		lcd_data,	CONF_LCD|(1<<LINE)|(0<<BITS)|(0<<FONT)
 			rcall	WR_NIB_H_COMM
 			ldi		lcd_data,	CONF_LCD|(1<<LINE)|(0<<BITS)|(0<<FONT)
 			rcall	WR_NIB_L_COMM
-			ldi		t1,50
-			rcall	DELAY_uS
+			ldi		t1,200
+			rcall	delay_us
+			ldi		t1,200
+			rcall	delay_us
 
 			;	DISPLAY ON/OFF
 			ldi		lcd_data,	CTRL_LCD|(0<<LCD_ON)|(0<<CUR_ON)|(0<<BLK_ON)
 			rcall	WR_NIB_H_COMM
 			ldi		lcd_data,	CTRL_LCD|(0<<LCD_ON)|(0<<CUR_ON)|(0<<BLK_ON)
 			rcall	WR_NIB_L_COMM
-			ldi		t1,50
-			rcall	DELAY_uS
+			ldi		t1,200
+			rcall	delay_us
+			ldi		t1,200
+			rcall	delay_us
 
 			;	CLEAR DISPLAY
 			ldi		lcd_data,	CLR_LCD
 			rcall	WR_NIB_H_COMM
 			ldi		lcd_data,	CLR_LCD
 			rcall	WR_NIB_L_COMM
-			ldi		t1,5
+			ldi		t1,40
 			rcall	DELAY_ms
 
 			;	ENTRY MODE SET
@@ -68,8 +76,10 @@ LCD_INI:
 			rcall	WR_NIB_H_COMM
 			ldi		lcd_data,	MODE_LCD|(1<<ID)|(0<<SH)
 			rcall	WR_NIB_L_COMM
-			ldi		t1,50
-			rcall	DELAY_uS
+			ldi		t1,200
+			rcall	delay_us
+			ldi		t1,200
+			rcall	delay_us
 
 			; 	CONFIG_DISPLAY
 			ldi		lcd_data,	CONF_LCD|(1<<LINE)|(0<<BITS)|(0<<FONT)
