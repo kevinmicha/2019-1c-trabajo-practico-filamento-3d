@@ -43,8 +43,8 @@ MAIN:
 	RJMP MAIN															;no hace nada mientras no haya interrupcion
 
 LEER_BITS:																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
-		CBI		DDRB,		3											;inicializo pin 3 de puerto D como entrada
-		SBI		DDRB,		2											;inicializo pin 4 del puerto D como salida CONECTAR SCK A ESTE PIN
+		CBI		DDRD,		3											;inicializo pin 3 de puerto D como entrada
+		SBI		DDRD,		2											;inicializo pin 4 del puerto D como salida CONECTAR SCK A ESTE PIN
 		LDI		contador,	26											;hay que mandar 26 pulsos
 		CLR		R18
 
@@ -52,18 +52,18 @@ LEER_BITS:																;leo bits del puerto D bit 3 porque es donde esta cone
 		LDI		ZL,			LOW(ADC_B)
 
 LOOP:
-		SBI		PORTB,		2											;mando 1 al sck
+		SBI		PORTD,		2											;mando 1 al sck
 
 		SER		R16														;espero 2 ciclos
 		CLR		R16
 
-		SBIS	PINB,		3											;leo info del DT
+		SBIS	PIND,		3											;leo info del DT
 		RCALL	GUARDAR_CERO
 
-		SBIC	PINB,		3
+		SBIC	PIND,		3
 		RCALL	GUARDAR_UNO
 
-		CBI		PORTB,		2											;mando 0 al sck
+		CBI		PORTD,		2											;mando 0 al sck
 
 		LDI		R16,		11											;espero 11 ciclos
 DE_NUEVO:
