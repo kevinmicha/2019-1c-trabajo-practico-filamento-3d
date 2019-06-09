@@ -76,6 +76,7 @@ ADC_B: .byte 3
 .def	t0	= r16			; variable global auxiliar
 .def	t1	= r17			; variable global auxiliar
 .def	contador = r19
+.def	contador2 = r20
 
 .def	eventos = r20
 .equ	EVENTO_RX_SERIE = 0
@@ -101,6 +102,8 @@ ADC_B: .byte 3
 
 		.org 	INT_VECTORS_SIZE ; salteo todos los vectores de interrupción
 RESET:	
+		ldi		contador, 61
+
 		ldi		r16,LOW(RAMEND)
 		out 	spl,r16
 		ldi 	r16,HIGH(RAMEND)
@@ -455,7 +458,7 @@ sumo_30h_bajo:
 LEER_BITS:																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
 		CBI		DDRD,		3											;inicializo pin 3 de puerto D como entrada
 		SBI		DDRD,		4											;inicializo pin 4 del puerto D como salida CONECTAR SCK A ESTE PIN
-		LDI		contador,	26											;hay que mandar 26 pulsos
+		LDI		contador2,	26											;hay que mandar 26 pulsos
 		CLR		R18
 
 		LDI		ZH,			HIGH(ADC_B)									;inicializo puntero
@@ -483,7 +486,7 @@ DE_NUEVO:
 		INC		R18														;guarde un bit entonces queda un lugar menos
 ;hasta aca tengo 1 ciclo en sck
 
-		DEC		contador
+		DEC		contador2
 		BRNE	LOOP
 
 		RETI
@@ -700,7 +703,7 @@ INICIALIZAR_TIMER2:
 
 	CLR		R25															;inicializo en 0
 	STS		TCNT2,		R25
-;configuro timer con prescaler de 1024 y modo normal
+;configuro timer sin prescaler y modo normal
 	LDS		R25,		TCCR2A
 	ANDI	R25,		~(1<<WGM20)
 	ORI		R25,		(1<<WGM21)
