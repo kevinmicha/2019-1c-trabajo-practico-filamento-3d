@@ -76,7 +76,7 @@ ADC_B: .byte 3
 .def	t0	= r16			; variable global auxiliar
 .def	t1	= r17			; variable global auxiliar
 .def	contador = r19
-.def	contador2 = r20
+.def	contador2 = r21
 
 .def	eventos = r20
 .equ	EVENTO_RX_SERIE = 0
@@ -153,6 +153,7 @@ MAIN:							; Programa principal (bucle infinito)
 		rcall	LEER_ADC
 
         clr		eventos
+		rcall	DT_A_1
 		rjmp	MAIN
 
 PROCESO_TRAMA_RX:
@@ -458,7 +459,7 @@ sumo_30h_bajo:
 LEER_BITS:																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
 		CBI		DDRD,		3											;inicializo pin 3 de puerto D como entrada
 		SBI		DDRD,		4											;inicializo pin 4 del puerto D como salida CONECTAR SCK A ESTE PIN
-		LDI		contador2,	26											;hay que mandar 26 pulsos
+		LDI		contador2,	24											;hay que mandar 24 pulsos para sacar 24 bits. DT NO VUELVE A 1
 		CLR		R18
 
 		LDI		ZH,			HIGH(ADC_B)									;inicializo puntero
@@ -722,7 +723,19 @@ INICIALIZAR_TIMER2:
 
 	RET
 	
-	
+DT_A_1:
+	SBI		PORTD,		4											;mando 1 al sck
+	RCALL	DELAY
+	CBI		PORTD,		4											;mando 0 al sck
+	RCALL	DELAY
+	RET
+
+DELAY:
+	LDI		R16,		11											;espero 11 ciclos
+AGAIN:
+	DEC		R16
+	BRNE	AGAIN
+	RET
 ;-------------------------------------------------------------------------
 ; fin del código
 ;-------------------------------------------------------------------------;
