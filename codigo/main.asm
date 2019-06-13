@@ -64,10 +64,12 @@
 ; variables en SRAM
 ;-------------------------------------------------------------------------
 		.dseg				; Segmento de datos (RAM)
+
+ADC_B: .byte 3
 TX_BUF:	.byte	BUF_SIZE	; buffer de transmisión serie
 RX_BUF: .byte	BUF_SIZE	; buffer de recepción de datos por puerto serie
 VERSION:.byte	1			; nro. de versión del programa
-ADC_B: .byte 3
+
 
 ;-------------------------------------------------------------------------
 ; variables en registros
@@ -75,7 +77,7 @@ ADC_B: .byte 3
 .def	ptr_tx_L = r8		; puntero al buffer de datos a transmitir
 .def	ptr_tx_H = r9
 .def	bytes_a_tx = r14 	; nro. de bytes a transmitir desde el buffer
-.def	bytes_recibidos = r11
+.def	bytes_recibidos = r13
 
 .def	t0	= r16			; variable global auxiliar
 .def	t1	= r17			; variable global auxiliar
@@ -128,9 +130,9 @@ RESET:
 		rcall	USART_init		; Configuro el puerto serie para tx/rx a 19.2 kbps
 								; y habilito la interrupción de recepción de datos.
 
-		lds		R16,	EICRA												;configuro int 0 por flanco ascendente
-		ori		R16,	(1<<ISC01)|(1<<ISC00)
-		sts		EICRA,	R16
+		;lds		R16,	EICRA												;configuro int 0 por flanco ascendente
+		;ori		R16,	(1<<ISC01)|(1<<ISC00)                               ;NO SE USA
+		;sts		EICRA,	R16
 
 		lds		R16,	EICRA												;configuro int 1 por flanco descendente
 		ori		R16,	(1<<ISC11)
@@ -140,7 +142,7 @@ RESET:
 ;habilito interrupciones
 
 		in		R16,	EIMSK
-		ori		R16,	(1<<INT0)|(1<<INT1)
+		ori		R16,	(1<<INT1)
 		out		EIMSK,	R16
 
 		rcall	INICIALIZAR_TIMER0			;TEMPORIZADOR GENERAL (marca los instantes de transmision por puerto serie)
@@ -489,7 +491,31 @@ sumo_30h_bajo:
 			ret
 
 ISR_MUESTRA_ADC:
+		PUSH	R16
+		PUSH	R17
+		IN		R16,	SREG
+		PUSH	R16
+
+
+		IN		R16,	PIN_ADC
+		LDI		R17,	5
+DT_BAJO:
+		SBRC	R16,	ADC_DT
+		RJMP	FIN_ISR
+
+		DEC		R17
+		BRNE	DT_BAJO
 		SBR		eventos,	(1<<EVENTO_ADC_FIN)
+
+		in		R16,	EIMSK
+		andi		R16,	~(1<<INT1)
+		out		EIMSK,	R16
+
+FIN_ISR:
+		POP		R16
+		OUT		SREG,	R16	
+		POP	R17
+		POP	R16
 		RETI
 
 LEER_BITS:		
@@ -505,15 +531,18 @@ LEER_BITS:
 
 		push contador2
 
-		PUSH	ZH
-		PUSH	ZL	
+		PUSH	YH
+		PUSH	YL	
 																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
+
+		;debag
+
+		SBI		DDRC,  0
 
 		LDI		contador2,	24											;hay que mandar 24 pulsos para sacar 24 bits. DT NO VUELVE A 1
 
 
-		LDI		ZH,			HIGH(ADC_B)									;inicializo puntero
-		LDI		ZL,			LOW(ADC_B)
+
 
 LOOP:
 		SBI		PORT_ADC,	ADC_SCK											;mando 1 al sck
@@ -528,11 +557,20 @@ ESPERO_1MICRO:
 		CLC
 		SBIC	PIN_ADC,		ADC_DT											;leo info del DT
 		SEC
+
+		BRCC	PORTC_0
+		CBI		PORTC, 0
+		RJMP	ROLEO
+
+PORTC_0:
+		SBI		PORTC,	0
+
+ROLEO:
 		ROL		R10
 		ROL		R11
 		ROL		R12
 
-		LDI		R16,		8											;espero 16 ciclos
+		LDI		R16,		8											;espero 8 ciclos
 ESPERO_EN_BAJO_SCK:
 		DEC		R16
 		BRNE	ESPERO_EN_BAJO_SCK
@@ -540,9 +578,17 @@ ESPERO_EN_BAJO_SCK:
 		DEC		contador2
 		BRNE	LOOP
 
-		;;ST		Z+,			R12
-		;ST		Z+,			R11
-		;ST		Z+,			R10
+		;LDI		YH,			HIGH(ADC_B)									;inicializo puntero
+		;LDI		YL,			LOW(ADC_B)
+
+		;MOV		R16,		R12
+		;CPI		R16,		0XFF
+		;BREQ	FIN
+
+		STS		ADC_B,			R12
+		STS		ADC_B+1,			R11
+		STS		ADC_B+2,			R10
+FIN:
 
 		;mando 2 pulsos de clk pidiendo la siguiente conversion del canal b
 
@@ -566,8 +612,16 @@ ESPERO_EN_BAJO_SC:
 		DEC		contador2
 		BRNE	SIGUIENTE_CONVERSION
 
-		POP		ZL
-		POP		ZH
+		in		R16,	EIFR
+		ori		R16,	(1<<INTF1)
+		out		EIFR,	R16
+
+		in		R16,	EIMSK
+		ori		R16,	(1<<INT1)
+		out		EIMSK,	R16
+
+		POP		YL
+		POP		YH
 		POP		contador2
 		POP		R10
 		POP		R11
