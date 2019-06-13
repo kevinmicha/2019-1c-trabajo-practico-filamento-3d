@@ -59,7 +59,7 @@
 .equ	LF	= 13			; '\n' caracter ascii de incremento de línea
 .equ	CR  = 10			; '\r' caracter ascii de retorno de carro
 .equ	ciclos = 61
-.equ	OV_PARA_1S = 2
+.equ	OV_PARA_1S = 63
 ;-------------------------------------------------------------------------
 ; variables en SRAM
 ;-------------------------------------------------------------------------
@@ -93,7 +93,7 @@ ADC_B: .byte 3
 			.cseg
 		rjmp	RESET			; interrupción del reset
 		
-		.org	INT0addr
+		.org	OVF0addr
 		rjmp	ISR_TOV0
 
 		.org	INT1addr		; Dt bajo, aviso a main que tiene que leer dato
@@ -147,6 +147,12 @@ RESET:
 
 		rcall	INICIALIZAR_TIMER2			;generador de cuadrada para monoestable
 	
+		ldi		ZH, high(ADC_B)
+		ldi		zl,	low(ADC_B)
+		ldi		r16,	8
+		st		z+,	r16
+		st		z+,	r16
+		st		z+,	r16
 		sei						; habilitación global de todas las interrupciones
 
 		rcall	TEST_TX			; transmite un mensaje de prueba
@@ -158,12 +164,13 @@ MAIN:							; Programa principal (bucle infinito)
 		tst		eventos			; Pasó algo?
 		breq	MAIN			;	nada
 
-		sbrs	eventos, EVENTO_ADC_FIN
+		sbrc	eventos, EVENTO_ADC_FIN
 		rjmp	EVENTO1
 
 		sbrc	eventos, EVENTO_1SEG
 		rjmp	EVENTO2
 
+		clr		eventos
 		rjmp	MAIN
 
 EVENTO1:
@@ -173,11 +180,8 @@ EVENTO1:
 
 EVENTO2:
 		CBR		eventos,	(1<<EVENTO_1SEG)
-		;rcall	LEER_ADC
-	LDI		R17,	(1<<LED)
-	IN		R16,	PORT_LED
-	EOR		R16,	r17
-	OUT		PORT_LED,	R16
+		rcall	LEER_ADC
+	
 		rjmp	main
 
 
@@ -536,9 +540,9 @@ ESPERO_EN_BAJO_SCK:
 		DEC		contador2
 		BRNE	LOOP
 
-		ST		Z+,			R12
-		ST		Z+,			R11
-		ST		Z+,			R10
+		;;ST		Z+,			R12
+		;ST		Z+,			R11
+		;ST		Z+,			R10
 
 		;mando 2 pulsos de clk pidiendo la siguiente conversion del canal b
 
@@ -589,18 +593,19 @@ INICIALIZAR_TIMER0:
 	CLR		R24															;inicializo en 0
 	OUT		TCNT0,		R24
 ;configuro timer con prescaler de 1024 y modo normal
-	IN		R24,		TCCR0A
-	ANDI	R24,		~((1<<WGM00) | (1<<WGM01))
-	OUT		TCCR0A,		R24
+	;IN		R24,		TCCR0A
+	;ANDI	R24,		~((1<<WGM00) | (1<<WGM01))
+	;OUT		TCCR0A,		R24
 
 	IN		R24,		TCCR0B
 	ORI		R24,		(1<<CS02) | (1<<CS00)
-	ANDI	R24,		~((1<<WGM02)|(1<<CS01))
-	OUT		TCCR0b,		R24
+	ANDI	R24,		~((1<<CS01))
+	OUT		TCCR0B,		R24
 
-	LDS		R24,		TIMSK0
+	;LDS		R24,		TIMSK0
+	input	r24,	TIMSK0
 	ORI		R24,		(1<<TOIE0)
-	STS		TIMSK0,		R24
+	output		TIMSK0,		R24
 
 	pop		r24
 	
@@ -612,17 +617,24 @@ ISR_TOV0:															;para monitorear flag TOV0
 	PUSH	R16
 	IN		R16,		SREG
 	PUSH	R16
-;	PUSH	R17
+	PUSH	R17
+
+	;LDI		R17,	(1<<LED)
+	;IN		R16,	PORT_LED
+	;EOR		R16,	r17
+	;OUT		PORT_LED,	R16
+
 
 	DEC		veces_ov_0
 	BRNE	FIN_ISR_TOV0
+
 	;paso un seg
 	LDI		veces_ov_0,	OV_PARA_1S
 	SBR		eventos,	(1<<EVENTO_1SEG)
 
 FIN_ISR_TOV0:	
 
-;	POP		R17
+	POP		R17
 	POP		R16
 	OUT		SREG,	R16
 	POP		R16
