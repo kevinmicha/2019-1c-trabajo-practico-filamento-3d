@@ -1,24 +1,24 @@
 ;-------------------------------------------------------------------------
-; AVR - ConfiguraciÃ³n y transmisiÃ³n por puerto serie
+; AVR - Configuración y transmisión por puerto serie
 ; Tiene las rutinas 
 ;	RESET: programa principal para testear las rutinas
 ;	USART_init: configura el puerto serie para tx/rx por interrupciones
-;	ISR_RX_USART_COMPLETA: rutina de servicio de interrupciÃ³n de recepciÃ³n
-;	ISR_REG_USART_VACIO: rutina de serv. de int. de transmisiÃ³n
-;	TEST_TX: rutina de transmisiÃ³n de prueba
-;	TX_MSJ: rutina de transmisiÃ³n genÃ©rica
+;	ISR_RX_USART_COMPLETA: rutina de servicio de interrupción de recepción
+;	ISR_REG_USART_VACIO: rutina de serv. de int. de transmisión
+;	TEST_TX: rutina de transmisión de prueba
+;	TX_MSJ: rutina de transmisión genérica
 ;
-; Ultima actualizaciÃ³n: 2019-MAY-05 09:47
+; Ultima actualización: 2019-MAY-05 09:47
 ;-------------------------------------------------------------------------
 
 ;-------------------------------------------------------------------------
 ; MCU: ATmega8/ATmega328P 
-; SegÃºn el entorno de desarrollo, el MCU (MicroController Unit) se elige
+; Según el entorno de desarrollo, el MCU (MicroController Unit) se elige
 ; a) desde Project->Properties se elige el microcontrolador
 ; b) con una directiva de include.
 ; En ambos casos se termina incluyendo un archivo m8def.inc/m328Pdef.inc
-; que definen un sÃ­mbolo _M8DEF_INC_/_M328PDEF_INC_ que se usa en toda
-; este cÃ³digo para distinguir entre registros de uno y otro micro.
+; que definen un símbolo _M8DEF_INC_/_M328PDEF_INC_ que se usa en toda
+; este código para distinguir entre registros de uno y otro micro.
 ;-------------------------------------------------------------------------
 ; Si el modo de seleccionar el MCU es el b) descomentar el include que 
 ; corresponda:
@@ -31,19 +31,23 @@
 ;-------------------------------------------------------------------------
 ; Puerto donde se conecta un LED
 ;-------------------------------------------------------------------------
-; En una placa Arduino uno el led estÃ¡ en PINB.5 y se enciende con '1'
-; para otros circuitos verificar la ubicaciÃ³n de algÃºn led y definir lo 
+; En una placa Arduino uno el led está en PINB.5 y se enciende con '1'
+; para otros circuitos verificar la ubicación de algún led y definir lo 
 ; siguiente:
 .equ	PORT_LED	= PORTB	; registro del puerto
 .equ	DIR_LED		= DDRB	; registro de direcciones del puerto
 .equ	LED			= 5		; nro. de bit (contando de 0 a 7=MSbit)
 							; nota: En 1/0 prende/apaga LED
-
+.equ	DIR_ADC		= DDRD
+.equ	ADC_DT		= 3
+.equ	ADC_SCK		= 4
+.equ	PORT_ADC    = PORTD
+.equ	PIN_ADC		= PIND
 ;-------------------------------------------------------------------------
 ; MACROS
 ;-------------------------------------------------------------------------
-; InclusiÃ³n de macros.  El *.inc debe estar en la misma carpeta que los 
-; demÃ¡s archivos fuente o bien incluir un path al mismo mediante:
+; Inclusión de macros.  El *.inc debe estar en la misma carpeta que los 
+; demás archivos fuente o bien incluir un path al mismo mediante:
 ;	Project->Properties->Toolchain->AVR Assembler->General->Include Paths
 .include "avr_macros.inc"	
 .listmac					; permite ver las macros en el listado *.lss
@@ -51,18 +55,18 @@
 ;-------------------------------------------------------------------------
 ; CONSTANTES
 ;-------------------------------------------------------------------------
-.equ	BUF_SIZE	= 64	; tamaÃ±o en bytes del buffer de transmisiÃ³n
-.equ	LF	= 13			; '\n' caracter ascii de incremento de lÃ­nea
+.equ	BUF_SIZE	= 64	; tamaño en bytes del buffer de transmisión
+.equ	LF	= 13			; '\n' caracter ascii de incremento de línea
 .equ	CR  = 10			; '\r' caracter ascii de retorno de carro
 .equ	ciclos = 61
-
+.equ	OV_PARA_1S = 2
 ;-------------------------------------------------------------------------
 ; variables en SRAM
 ;-------------------------------------------------------------------------
 		.dseg				; Segmento de datos (RAM)
-TX_BUF:	.byte	BUF_SIZE	; buffer de transmisiÃ³n serie
-RX_BUF: .byte	BUF_SIZE	; buffer de recepciÃ³n de datos por puerto serie
-VERSION:.byte	1			; nro. de versiÃ³n del programa
+TX_BUF:	.byte	BUF_SIZE	; buffer de transmisión serie
+RX_BUF: .byte	BUF_SIZE	; buffer de recepción de datos por puerto serie
+VERSION:.byte	1			; nro. de versión del programa
 ADC_B: .byte 3
 
 ;-------------------------------------------------------------------------
@@ -70,29 +74,30 @@ ADC_B: .byte 3
 ;-------------------------------------------------------------------------
 .def	ptr_tx_L = r8		; puntero al buffer de datos a transmitir
 .def	ptr_tx_H = r9
-.def	bytes_a_tx = r10 	; nro. de bytes a transmitir desde el buffer
+.def	bytes_a_tx = r14 	; nro. de bytes a transmitir desde el buffer
 .def	bytes_recibidos = r11
 
 .def	t0	= r16			; variable global auxiliar
 .def	t1	= r17			; variable global auxiliar
-.def	contador = r19
+.def	veces_ov_0 = r19
 .def	contador2 = r21
 
 .def	eventos = r20
 .equ	EVENTO_RX_SERIE = 0
-.equ	EVENTO_ADC_FIN = 0;
+.equ	EVENTO_ADC_FIN = 1
+.equ	EVENTO_1SEG = 2
 
 ;-------------------------------------------------------------------------
 ; CODIGO
 ;-------------------------------------------------------------------------
 			.cseg
-		rjmp	RESET			; interrupciÃ³n del reset
+		rjmp	RESET			; interrupción del reset
 		
 		.org	INT0addr
-		rjmp	PASO_1SEG
+		rjmp	ISR_TOV0
 
-		.org	INT1addr														;cuando sucede la int el SP apunta a INT0addr (primera posicion del vect de int)
-		rjmp	LEER_BITS	
+		.org	INT1addr		; Dt bajo, aviso a main que tiene que leer dato
+		rjmp	ISR_MUESTRA_ADC	
 			
 		.org	URXCaddr		; USART, Rx Complete
 		rjmp	ISR_RX_USART_COMPLETA
@@ -100,23 +105,28 @@ ADC_B: .byte 3
 		.org	UDREaddr		; USART Data Register Empty
 		rjmp	ISR_REG_USART_VACIO
 
-		.org 	INT_VECTORS_SIZE ; salteo todos los vectores de interrupciÃ³n
+		.org 	INT_VECTORS_SIZE ; salteo todos los vectores de interrupción
 RESET:	
-		ldi		contador, 61 	; LO QUÃ‰? Esto asÃ­ no va
 
 		ldi		r16,LOW(RAMEND)
 		out 	spl,r16
 		ldi 	r16,HIGH(RAMEND)
-		out 	sph,r16			; inicializaciÃ³n del puntero a la pila
+		out 	sph,r16			; inicialización del puntero a la pila
 
 		sbi		DIR_LED, LED	; configuro como salida el puerto para manejar el LED
 		sbi		PORT_LED, LED	; PRENDO el LED
 
+		CBI		DIR_ADC,	ADC_DT	; inicializo pin 3 de puerto D como entrada  D.3=ADC_DT
+		SBI		DIR_ADC,	ADC_SCK	; inicializo pin 4 del puerto D como salida  D.4=ADC_SCK
+
+		CBI		PORT_ADC,	ADC_SCK	;adc en bajo consumo
+		SBI		PORT_ADC,	ADC_DT	;dt es una entrada con pull up interno
+
 		ldi		t0, 0x13
-		sts		VERSION, t0		; versiÃ³n actual de este mÃ³dulo
+		sts		VERSION, t0		; versión actual de este módulo
 
 		rcall	USART_init		; Configuro el puerto serie para tx/rx a 19.2 kbps
-								; y habilito la interrupciÃ³n de recepciÃ³n de datos.
+								; y habilito la interrupción de recepción de datos.
 
 		lds		R16,	EICRA												;configuro int 0 por flanco ascendente
 		ori		R16,	(1<<ISC01)|(1<<ISC00)
@@ -133,33 +143,48 @@ RESET:
 		ori		R16,	(1<<INT0)|(1<<INT1)
 		out		EIMSK,	R16
 
-		rcall	INICIALIZAR_TIMER0			;comienza a contar
+		rcall	INICIALIZAR_TIMER0			;TEMPORIZADOR GENERAL (marca los instantes de transmision por puerto serie)
 
-		rcall	INICIALIZAR_TIMER2
+		rcall	INICIALIZAR_TIMER2			;generador de cuadrada para monoestable
 	
-		sei						; habilitaciÃ³n global de todas las interrupciones
+		sei						; habilitación global de todas las interrupciones
 
-		;rcall	TEST_TX			; transmite un mensaje de prueba
+		rcall	TEST_TX			; transmite un mensaje de prueba
 
 		
 
 MAIN:							; Programa principal (bucle infinito)
-
-		rcall	MONITOREAR_TOV0
-		tst		eventos			; PasÃ³ algo?
+		;rcall	MONITOREAR_TOV0
+		tst		eventos			; Pasó algo?
 		breq	MAIN			;	nada
 
-		sbrc	eventos, EVENTO_ADC_FIN
-		rcall	LEER_ADC
+		sbrs	eventos, EVENTO_ADC_FIN
+		rjmp	EVENTO1
 
-        clr		eventos
-		rcall	DT_A_1
+		sbrc	eventos, EVENTO_1SEG
+		rjmp	EVENTO2
+
 		rjmp	MAIN
 
+EVENTO1:
+		CBR		eventos,	(1<<EVENTO_ADC_FIN)
+		rcall	LEER_BITS
+		rjmp	main
+
+EVENTO2:
+		CBR		eventos,	(1<<EVENTO_1SEG)
+		;rcall	LEER_ADC
+	LDI		R17,	(1<<LED)
+	IN		R16,	PORT_LED
+	EOR		R16,	r17
+	OUT		PORT_LED,	R16
+		rjmp	main
+
+
 PROCESO_TRAMA_RX:
-		// Los datos recibidos x puerto serie estÃ¡n a partir del direcciÃ³n RAM RX_BUF
-		// y terminan siempre con el caracter LF.   AdemÃ¡s "bytes_recibidos" me dice
-		// cuÃ¡ntos bytes tiene la trama.
+		// Los datos recibidos x puerto serie están a partir del dirección RAM RX_BUF
+		// y terminan siempre con el caracter LF.   Además "bytes_recibidos" me dice
+		// cuántos bytes tiene la trama.
 		cbr		eventos,(1<<EVENTO_RX_SERIE)	; Limpio flag del evento
 		clr		bytes_recibidos					; limpio nro. de bytes recibidos porque no lo uso
 
@@ -167,11 +192,11 @@ PROCESO_TRAMA_RX:
 		cpi		t0, '1'
 		brne	VER_SI_ES_CERO
 
-		sbi		PORT_LED, LED	; Si recibiÃ³ un '1', prende el LED
+		sbi		PORT_LED, LED	; Si recibió un '1', prende el LED
 		rjmp	MAIN
 
 LEER_ADC:
-		; Leen ADC y guardan el valor leÃ­do en ADC_B, ADC_B+1 y ADC_B+2
+		; Leen ADC y guardan el valor leído en ADC_B, ADC_B+1 y ADC_B+2
 		ldiw  Z, (MSJ_DATO<<1)
 		rcall TX_MSJ
 		ret
@@ -208,28 +233,28 @@ USART_init:
 		; Trama: 8 bits de datos, sin paridad y 1 bit de stop, 
 		outi 	UCSR0C,(0<<UPM01)|(0<<UPM00)|(0<<USBS0)|(0<<UCSZ02)|(1<<UCSZ01)|(1<<UCSZ00)
 		; Configura los terminales de TX y RX; y habilita
-		; 	Ãºnicamente la int. de recepciÃ³n
+		; 	únicamente la int. de recepción
 		outi	UCSR0B,(1<<RXCIE0)|(1<<RXEN0)|(1<<TXEN0)|(0<<UDRIE0)
 #else
-		outi	UBRRH,high(BAUD_RATE)	; Velocidad de transmisiÃ³n
+		outi	UBRRH,high(BAUD_RATE)	; Velocidad de transmisión
 		outi	UBRRL,low(BAUD_RATE)
 		outi	UCSRA,(1<<U2X)			; Modo asinc., doble velocidad
 		outi 	UCSRC,(1<<URSEL)|(0<<UPM1)|(0<<UPM0)|(0<<USBS)|(1<<UCSZ1)|(1<<UCSZ0)
 		outi	UCSRB,(1<<RXCIE)|(1<<RXEN)|(1<<TXEN)|(0<<UDRIE)
 #endif
 		movi	ptr_tx_L,LOW(TX_BUF)	; inicializa puntero al 
-		movi	ptr_tx_H,HIGH(TX_BUF)	; buffer de transmisiÃ³n.
+		movi	ptr_tx_H,HIGH(TX_BUF)	; buffer de transmisión.
 	
 		ldiw	X,TX_BUF				; limpia BUF_SIZE posiciones 
-		ldi		t1, BUF_SIZE			; del buffer de transmisiÃ³n
+		ldi		t1, BUF_SIZE			; del buffer de transmisión
 		clr		t0
 loop_limpia:
 		st		X+,t0
 		dec		t1
 		brne	loop_limpia
 					
-		clr		bytes_a_tx		; nada pendiente de transmisiÃ³n
-		clr		bytes_recibidos	; nada recibido aÃºn.
+		clr		bytes_a_tx		; nada pendiente de transmisión
+		clr		bytes_recibidos	; nada recibido aún.
 
 		popw	X
 		pop		t1
@@ -244,7 +269,7 @@ loop_limpia:
 ; Devuelve: nada
 ;-------------------------------------------------------------------------
 ISR_RX_USART_COMPLETA:
-; EL registro UDR tiene un dato y deberÃ­a ser procesado
+; EL registro UDR tiene un dato y debería ser procesado
 		push	t0
 		pushi	SREG
 		pushw	Y
@@ -256,7 +281,7 @@ ISR_RX_USART_COMPLETA:
 
 #ifdef  _M328PDEF_INC_
 		input	t0,	UDR0
-		output	UDR0, t0
+		;output	UDR0, t0
 #else
 		input	t0, UDR
 #endif
@@ -266,9 +291,9 @@ ISR_RX_USART_COMPLETA:
 		cp		bytes_recibidos, t0
 		brlo	BUF_RX_CON_ESPACIO
 
-		clr		bytes_recibidos		; error, se sobrepasÃ³ el espacio disponible 
+		clr		bytes_recibidos		; error, se sobrepasó el espacio disponible 
 									; para mensajes recibidos x puerto serie.
-									; DeberÃ­a informar al main (pero no lo hago).
+									; Debería informar al main (pero no lo hago).
 BUF_RX_CON_ESPACIO:		
 		ld		t0, Y
 ACA:
@@ -286,49 +311,52 @@ FIN_ISR_RX_USART:
 
 ;------------------------------------------------------------------------
 ; TRANSMISION: interrumpe cada vez que puede transmitir un byte.
-; Se transmiten "bytes_a_tx" comenzando desde la posiciÃ³n TX_BUF del
-; buffer. Si "bytes_a_tx" llega a cero, se deshabilita la interrupciÃ³n.
+; Se transmiten "bytes_a_tx" comenzando desde la posición TX_BUF del
+; buffer. Si "bytes_a_tx" llega a cero, se deshabilita la interrupción.
 ;
 ; Recibe: 	bytes_a_tx.
 ; Devuelve: ptr_tx_H:ptr_tx_L, y bytes_a_tx.
 ;------------------------------------------------------------------------
-ISR_REG_USART_VACIO:		; UDR estÃ¡ vacÃ­o
+ISR_REG_USART_VACIO:		; UDR está vacío
 		push	t0
 		push	t1
 		pushi	SREG
 		pushw	X
 
 
-		tst		bytes_a_tx	; hay datos pendientes de transmisiÃ³n?
+		tst		bytes_a_tx	; hay datos pendientes de transmisión?
 		breq	FIN_TRANSMISION
 
-		movw	XL,ptr_tx_L	; Recupera puntero al prÃ³ximo byte a tx.
+		movw	XL,ptr_tx_L	; Recupera puntero al próximo byte a tx.
 		ld		t0,X+		; lee byte del buffer y apunta al
 
 #ifdef  _M328PDEF_INC_
 		output	UDR0, t0
 #else
-		output	UDR, t0		; sgte. dato a transmitir (en la prÃ³xima int.)
+		output	UDR, t0		; sgte. dato a transmitir (en la próxima int.)
 #endif
 
 		cpi		XL,LOW(TX_BUF+BUF_SIZE)
 		brlo	SALVA_PTR_TX
 		cpi		XH,HIGH(TX_BUF+BUF_SIZE)
 		brlo	SALVA_PTR_TX
-		ldiw	X,TX_BUF	; ptr_tx=ptr_tx+1, (mÃ³dulo BUF_SIZE)
+		ldiw	X,TX_BUF	; ptr_tx=ptr_tx+1, (módulo BUF_SIZE)
 
 SALVA_PTR_TX:
 		movw	ptr_tx_L,XL	; preserva puntero a sgte. dato
 
 		dec		bytes_a_tx	; Descuenta el nro. de bytes a tx. en 1
 		brne	SIGUE_TX	; si quedan datos que transmitir
-							;	vuelve en la prÃ³xima int.
+							;	vuelve en la próxima int.
 
 FIN_TRANSMISION:			; si no hay nada que enviar,
 #ifdef  _M328PDEF_INC_
-		cbix	UCSR0B, UDRIE0
+		lds		t0, UCSR0B
+		andi	t0, ~(1<<UDRIE0)
+		sts		UCSR0B, t0
+		;cbix		UCSR0B, UDRIE0
 #else
-		cbix	UCSRB,	UDRIE	; 	se deshabilita la interrupciÃ³n.
+		cbix	UCSRB,	UDRIE	; 	se deshabilita la interrupción.
 #endif
 
 sigue_tx:
@@ -340,7 +368,7 @@ sigue_tx:
 
 ;-------------------------------------------------------------------------
 ; TEST_TX: transmite el mensaje almacenado en memoria flash a partir
-; de la direcciÃ³n MSJ_TEST_TX que termina con 0x00 (el 0 no se transmite).
+; de la dirección MSJ_TEST_TX que termina con 0x00 (el 0 no se transmite).
 ; Recibe: nada
 ; Devuelve: nada
 ;-------------------------------------------------------------------------
@@ -361,32 +389,32 @@ MSJ_DATO:
 MSJ_TEST_TX:
 ;.db	"Puerto Serie Version 0.3 ",'\r','\n',0
 .db		"Filamento proyecto %"
-.dw		VERSION		; direcciÃ³n RAM de la variable (byte hexa) a tx
+.dw		VERSION		; dirección RAM de la variable (byte hexa) a tx
 .db		'\r','\n',0,0	; el 2do cero completa un nro. par de bytes
 
 ;-------------------------------------------------------------------------
 ; TX_MSJ: transmite el mensaje almacenado en memoria flash a partir
-; de la direcciÃ³n que se pase en el puntero Z.   El mensaje debe termina 
+; de la dirección que se pase en el puntero Z.   El mensaje debe termina 
 ; con 0x00 (el 0 no se transmite).
 ; 
 ; Recibe: Z (=r31|r30)
 ; Devuelve: bytes_a_tx > 0
-; Habilita la int. de transmisiÃ³n serie con ISR en ISR_REG_USART_VACIO().
+; Habilita la int. de transmisión serie con ISR en ISR_REG_USART_VACIO().
 ;-------------------------------------------------------------------------
 TX_MSJ:
 			push	t0
 			pushi	SREG
 			pushw	X
 
-			movw	XL, ptr_tx_L	; toma el Ãºltimo valor del puntero
+			movw	XL, ptr_tx_L	; toma el último valor del puntero
 
 COPIA_A_TX_BUF:
 			lpm		t0,Z+			; y copia de flash a ram
 			tst		t0				; si encuentra un 0x00 en el mensaje, termina
-			breq	ACTIVA_TX_MSJ	;	de cargar el buffer en RAM e incia la transmisiÃ³n.
+			breq	ACTIVA_TX_MSJ	;	de cargar el buffer en RAM e incia la transmisión.
 
 ; Si el carcter es '%' seguido de un nro. hexadecimal de 16 bits, toma el byte
-; de esa direcciÃ³n de RAM, lo convierte a ASCII y lo pone en el buffer de transmisiÃ³n.
+; de esa dirección de RAM, lo convierte a ASCII y lo pone en el buffer de transmisión.
 			cpi		t0, '%'
 			brne	NO_HAY_VARIABLES
 
@@ -405,7 +433,7 @@ COPIA_A_TX_BUF:
 			brlo	NO_HAY_VARIABLES
 			cpi		XH, high(TX_BUF+BUF_SIZE)
 			brlo	NO_HAY_VARIABLES
-			ldiw	X, TX_BUF		; ptr_tx++ mÃ³dulo BUF_SIZE
+			ldiw	X, TX_BUF		; ptr_tx++ módulo BUF_SIZE
 
 NO_HAY_VARIABLES:
 			st		X+,t0
@@ -415,7 +443,7 @@ NO_HAY_VARIABLES:
 			brlo	COPIA_A_TX_BUF
 			cpi		XH, high(TX_BUF+BUF_SIZE)
 			brlo	COPIA_A_TX_BUF
-			ldiw	X, TX_BUF		; ptr_tx++ mÃ³dulo BUF_SIZE
+			ldiw	X, TX_BUF		; ptr_tx++ módulo BUF_SIZE
 
 			rjmp	COPIA_A_TX_BUF
 	
@@ -456,213 +484,108 @@ sumo_30h_bajo:
 			mov		r0, t0
 			ret
 
+ISR_MUESTRA_ADC:
+		SBR		eventos,	(1<<EVENTO_ADC_FIN)
+		RETI
+
 LEER_BITS:		
 
 		push	r16
-		push	r18
+		
+		IN		R16,		SREG
+		PUSH	R16
+
+		PUSH	R12
+		PUSH	R11
+		PUSH	R10
+
 		push contador2
+
+		PUSH	ZH
+		PUSH	ZL	
 																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
-		CBI		DDRD,		3											;inicializo pin 3 de puerto D como entrada
-		SBI		DDRD,		4											;inicializo pin 4 del puerto D como salida CONECTAR SCK A ESTE PIN
+
 		LDI		contador2,	24											;hay que mandar 24 pulsos para sacar 24 bits. DT NO VUELVE A 1
-		CLR		R18
+
 
 		LDI		ZH,			HIGH(ADC_B)									;inicializo puntero
 		LDI		ZL,			LOW(ADC_B)
 
 LOOP:
-		SBI		PORTD,		4											;mando 1 al sck
-
-		SER		R16														;espero 2 ciclos
-		CLR		R16
-
-		SBIS	PIND,		3											;leo info del DT
-		RCALL	GUARDAR_CERO
-
-		SBIC	PIND,		3
-		RCALL	GUARDAR_UNO
-
-		CBI		PORTD,		4											;mando 0 al sck
+		SBI		PORT_ADC,	ADC_SCK											;mando 1 al sck
 
 		LDI		R16,		16											;espero 16 ciclos
-DE_NUEVO:
+ESPERO_1MICRO:
 		DEC		R16
-		BRNE	DE_NUEVO
+		BRNE	ESPERO_1MICRO
 
-		INC		R18														;guarde un bit entonces queda un lugar menos
-;hasta aca tengo 1 ciclo en sck
+		CBI		PORT_ADC,	ADC_SCK											;mando 0 al sck
+
+		CLC
+		SBIC	PIN_ADC,		ADC_DT											;leo info del DT
+		SEC
+		ROL		R10
+		ROL		R11
+		ROL		R12
+
+		LDI		R16,		8											;espero 16 ciclos
+ESPERO_EN_BAJO_SCK:
+		DEC		R16
+		BRNE	ESPERO_EN_BAJO_SCK
 
 		DEC		contador2
 		BRNE	LOOP
 
-		pop		r18
-		pop		r16
-		pop		contador2
+		ST		Z+,			R12
+		ST		Z+,			R11
+		ST		Z+,			R10
 
-		RETI
-;hasta aca tengo 26 ciclos
+		;mando 2 pulsos de clk pidiendo la siguiente conversion del canal b
 
-GUARDAR_CERO:
-		CPI		R18,		8											;veo si tengo lugar en la misma palabra
-		BRNE	NO_INC
+		LDI		contador2,	2
 
-		ADIW	ZH:ZL,		1											;paso al siguiente byte
-		CLR		R18
+SIGUIENTE_CONVERSION:
+		SBI		PORT_ADC,	ADC_SCK											;mando 1 al sck
 
-NO_INC:
-		LD		R16,		Z											;leo lo que ya estaba guardado en la direcc a la que apunta Z
+		LDI		R16,		16											;espero 16 ciclos
+ESPERO_CLK_ALTO_SC:
+		DEC		R16
+		BRNE	ESPERO_CLK_ALTO_SC
 
-		CPI		R18,		0											;veo si tengo lugar en la misma palabra
-		BREQ	PRIMER_BIT
+		CBI		PORT_ADC,	ADC_SCK											;mando 0 al sck
 
-		
-		CPI		R18,		1											;veo si tengo lugar en la misma palabra
-		BREQ	SEGUNDO_BIT
+		LDI		R16,		16											;espero 16 ciclos
+ESPERO_EN_BAJO_SC:
+		DEC		R16
+		BRNE	ESPERO_EN_BAJO_SC
 
-		
-		CPI		R18,		2											;veo si tengo lugar en la misma palabra
-		BREQ	TERCER_BIT
+		DEC		contador2
+		BRNE	SIGUIENTE_CONVERSION
 
-		
-		CPI		R18,		3											;veo si tengo lugar en la misma palabra
-		BREQ	CUARTO_BIT
+		POP		ZL
+		POP		ZH
+		POP		contador2
+		POP		R10
+		POP		R11
+		POP		R12
+		POP     R16
 
-		
-		CPI		R18,		4											;veo si tengo lugar en la misma palabra
-		BREQ	QUINTO_BIT
-
-		CPI		R18,		5											;veo si tengo lugar en la misma palabra
-		BREQ	SEXTO_BIT
-
-		CPI		R18,		6											;veo si tengo lugar en la misma palabra
-		BREQ	SEPTIMO_BIT
-
-		CPI		R18,		7											;veo si tengo lugar en la misma palabra
-		BREQ	OCTAVO_BIT
-
-PRIMER_BIT:
-		ANDI	R16,		~(1<<7)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEGUNDO_BIT:
-		ANDI	R16,		~(1<<6)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-TERCER_BIT:
-		ANDI	R16,		~(1<<5)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-CUARTO_BIT:
-		ANDI	R16,		~(1<<4)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-QUINTO_BIT:
-		ANDI	R16,		~(1<<3)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEXTO_BIT:
-		ANDI	R16,		~(1<<2)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEPTIMO_BIT:
-		ANDI	R16,		~(1<<1)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-OCTAVO_BIT:
-		ANDI	R16,		~(1<<0)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-GUARDAR_UNO:
-		CPI		R18,		8											;veo si tengo lugar en la misma palabra
-		BRNE	NO_INC1
-
-		ADIW	ZH:ZL,		1											;paso al siguiente byte
-		CLR		R18
-
-NO_INC1:
-		LD		R16,		Z											;leo lo que ya estaba guardado en la direcc a la que apunta Z
-
-		CPI		R18,		0											;veo si tengo lugar en la misma palabra
-		BREQ	PRIMER_BIT1
+		OUT		SREG,		R16
+		POP		R16
 
 		
-		CPI		R18,		1											;veo si tengo lugar en la misma palabra
-		BREQ	SEGUNDO_BIT1
+		RET
 
-		
-		CPI		R18,		2											;veo si tengo lugar en la misma palabra
-		BREQ	TERCER_BIT1
-
-		
-		CPI		R18,		3											;veo si tengo lugar en la misma palabra
-		BREQ	CUARTO_BIT1
-
-		
-		CPI		R18,		4											;veo si tengo lugar en la misma palabra
-		BREQ	QUINTO_BIT1
-
-		CPI		R18,		5											;veo si tengo lugar en la misma palabra
-		BREQ	SEXTO_BIT1
-
-		CPI		R18,		6											;veo si tengo lugar en la misma palabra
-		BREQ	SEPTIMO_BIT1
-
-		CPI		R18,		7											;veo si tengo lugar en la misma palabra
-		BREQ	OCTAVO_BIT1
-
-PRIMER_BIT1:
-		ORI		R16,		(1<<7)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEGUNDO_BIT1:
-		ORI		R16,		(1<<6)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-TERCER_BIT1:
-		ORI		R16,		(1<<5)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-CUARTO_BIT1:
-		ORI		R16,		(1<<4)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-QUINTO_BIT1:
-		ORI		R16,		(1<<3)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEXTO_BIT1:
-		ORI		R16,		(1<<2)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SEPTIMO_BIT1:
-		ORI		R16,		(1<<1)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-OCTAVO_BIT1:
-		ORI		R16,		(1<<0)
-		ST		Z,			R16											;guardo nuevo valor
-		RJMP	SALIDA
-
-SALIDA:
-	RET
 
 
 INICIALIZAR_TIMER0:
+;corre a 16 M/1024 = 15625 Hz (periodo = 64 micros) 
+
+
+	push	r24
+
+	ldi		veces_ov_0, OV_PARA_1S	;overflow cada 16 ms (para 1 s necesito 63 overflows)
+
 	CLR		R24															;inicializo en 0
 	OUT		TCNT0,		R24
 ;configuro timer con prescaler de 1024 y modo normal
@@ -674,45 +597,36 @@ INICIALIZAR_TIMER0:
 	ORI		R24,		(1<<CS02) | (1<<CS00)
 	ANDI	R24,		~((1<<WGM02)|(1<<CS01))
 	OUT		TCCR0b,		R24
+
+	LDS		R24,		TIMSK0
+	ORI		R24,		(1<<TOIE0)
+	STS		TIMSK0,		R24
+
+	pop		r24
 	
 	RET
 
-MONITOREAR_TOV0:															;para monitorear flag TOV0
-	IN		R16,		TIFR0
-	SBRC	R16,		TOV0
-	RJMP	NUEVO_CICLO
-	RJMP	MONITOREAR_TOV0
 
-NUEVO_CICLO:
-	SBI		TIFR0,		TOV0											;cuando llega a 255 empiezo de nuevo 61 veces
-	DEC		contador
-	BRNE	MONITOREAR_TOV0
-	
-	LDI		R16,		185												;inicializo para contar los ciclos que faltan
-	OUT		TCNT0,		R16
 
-LOOP2_TIMER:																	;para monitorear flag TOV0
-	IN		R16,		TIFR0
-	SBRS	R16,		TOV0
-	RJMP	LOOP2_TIMER
+ISR_TOV0:															;para monitorear flag TOV0
+	PUSH	R16
+	IN		R16,		SREG
+	PUSH	R16
+;	PUSH	R17
 
-	SBI		DDRD,		2												;inicializo como salida
-	CBI		PORTD,		2												;envio flanco ascendente a INT0
-	nop
-	nop
-	nop
-	nop
-	nop
-	SBI		PORTD,		2
-	nop
-	nop
-	nop
-	nop
-	nop
-	RET
+	DEC		veces_ov_0
+	BRNE	FIN_ISR_TOV0
+	;paso un seg
+	LDI		veces_ov_0,	OV_PARA_1S
+	SBR		eventos,	(1<<EVENTO_1SEG)
 
-PASO_1SEG:
-	SBR		eventos,	0x1											;bit 0 en 1 cuando se habilita interrupcion
+FIN_ISR_TOV0:	
+
+;	POP		R17
+	POP		R16
+	OUT		SREG,	R16
+	POP		R16
+
 	RETI
 
 ;timer para generar cuadrada
@@ -743,19 +657,6 @@ INICIALIZAR_TIMER2:
 
 	RET
 	
-DT_A_1:
-	SBI		PORTD,		4											;mando 1 al sck
-	RCALL	DELAY
-	CBI		PORTD,		4											;mando 0 al sck
-	RCALL	DELAY
-	RET
-
-DELAY:
-	LDI		R16,		16											;espero 11 ciclos
-AGAIN:
-	DEC		R16
-	BRNE	AGAIN
-	RET
 ;-------------------------------------------------------------------------
-; fin del cÃ³digo
+; fin del código
 ;-------------------------------------------------------------------------;
