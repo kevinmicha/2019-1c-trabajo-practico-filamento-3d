@@ -1,4 +1,5 @@
 ;-------------------------------------------------------------------------
+;-------------------------------------------------------------------------
 ; AVR - Configuración y transmisión por puerto serie
 ; Tiene las rutinas 
 ;	RESET: programa principal para testear las rutinas
@@ -60,20 +61,29 @@
 .equ	CR  = 10			; '\r' caracter ascii de retorno de carro
 .equ	ciclos = 61
 .equ	OV_PARA_1S = 63
+
+.equ	IT_VACIO	= 20	; cantidad de mediciones que se hacen en vacío
+.equ	UMBRAL = 0x10
+.equ	N_BUFFER = 8        ; cantidad de mediciones promediadas del adc
+.equ	IT_MEMORIA = 8		;esto ya no se usa porque fue reemplazado por el anterior
 ;-------------------------------------------------------------------------
 ; variables en SRAM
 ;-------------------------------------------------------------------------
 		.dseg				; Segmento de datos (RAM)
 
-ADC_B: .byte 3
 TX_BUF:	.byte	BUF_SIZE	; buffer de transmisión serie
 RX_BUF: .byte	BUF_SIZE	; buffer de recepción de datos por puerto serie
 VERSION:.byte	1			; nro. de versión del programa
+ADC_BUFFER: .byte N_BUFFER*3
+ADC_PROMEDIO: .byte 3
+ADC_VACIO: .byte 2
 
 
 ;-------------------------------------------------------------------------
 ; variables en registros
 ;-------------------------------------------------------------------------
+
+.def	restan_para_introducir = r5
 .def	ptr_tx_L = r8		; puntero al buffer de datos a transmitir
 .def	ptr_tx_H = r9
 .def	bytes_a_tx = r14 	; nro. de bytes a transmitir desde el buffer
@@ -84,10 +94,16 @@ VERSION:.byte	1			; nro. de versión del programa
 .def	veces_ov_0 = r19
 .def	contador2 = r21
 
+.def	nro_veces = r22
+
 .def	eventos = r20
 .equ	EVENTO_RX_SERIE = 0
 .equ	EVENTO_ADC_FIN = 1
 .equ	EVENTO_1SEG = 2
+.equ	EVENTO_PROMEDIAR = 3
+.equ	EVENTO_M = 4  
+.equ	EVENTO_FILAMENTO = 5
+.equ	EVENTO_V = 6
 
 ;-------------------------------------------------------------------------
 ; CODIGO
@@ -115,8 +131,19 @@ RESET:
 		ldi 	r16,HIGH(RAMEND)
 		out 	sph,r16			; inicialización del puntero a la pila
 
+		;ldi		r16,		IT_MEMORIA
+		;mov		nro_veces,	r16	; cantidad de números que se promediarán
+
+		ldi		r16,		IT_VACIO
+		mov		restan_para_introducir, r16
+
+		LDI		YH,		HIGH(ADC_BUFFER)
+		LDI		YL,		LOW(ADC_BUFFER)
+
+		LDI		nro_veces,		N_BUFFER
+
 		sbi		DIR_LED, LED	; configuro como salida el puerto para manejar el LED
-		sbi		PORT_LED, LED	; PRENDO el LED
+		cbi		PORT_LED, LED	; PRENDO el LED
 
 		CBI		DIR_ADC,	ADC_DT	; inicializo pin 3 de puerto D como entrada  D.3=ADC_DT
 		SBI		DIR_ADC,	ADC_SCK	; inicializo pin 4 del puerto D como salida  D.4=ADC_SCK
@@ -148,13 +175,7 @@ RESET:
 		rcall	INICIALIZAR_TIMER0			;TEMPORIZADOR GENERAL (marca los instantes de transmision por puerto serie)
 
 		rcall	INICIALIZAR_TIMER2			;generador de cuadrada para monoestable
-	
-		ldi		ZH, high(ADC_B)
-		ldi		zl,	low(ADC_B)
-		ldi		r16,	8
-		st		z+,	r16
-		st		z+,	r16
-		st		z+,	r16
+
 		sei						; habilitación global de todas las interrupciones
 
 		rcall	TEST_TX			; transmite un mensaje de prueba
@@ -162,17 +183,28 @@ RESET:
 		
 
 MAIN:							; Programa principal (bucle infinito)
-		;rcall	MONITOREAR_TOV0
+
 		tst		eventos			; Pasó algo?
 		breq	MAIN			;	nada
 
+		sbrc	eventos, EVENTO_FILAMENTO
+		rjmp	EVENTO5						; activar con m-enter
+
+;		sbrc	eventos, EVENTO_INS_FIL
+;		rjmp	EVENTO4						; no existe más
+
+		sbrc	eventos, EVENTO_PROMEDIAR
+		rjmp	EVENTO3
+		
 		sbrc	eventos, EVENTO_ADC_FIN
 		rjmp	EVENTO1
 
 		sbrc	eventos, EVENTO_1SEG
 		rjmp	EVENTO2
 
-		clr		eventos
+		sbrc	eventos, EVENTO_RX_SERIE
+		rjmp	PROCESO_TRAMA_RX
+
 		rjmp	MAIN
 
 EVENTO1:
@@ -185,7 +217,23 @@ EVENTO2:
 		rcall	LEER_ADC
 	
 		rjmp	main
+EVENTO3:
+		CBR		eventos,	(1<<EVENTO_PROMEDIAR)
+		rcall	PROMEDIAR_MUESTRAS
+	
+		rjmp	main
 
+;EVENTO4:
+; se prende el 4to bit de eventos cuando se pasa de medir en vacío a introducir el filamento. Hay un delay
+		;CBR		eventos,	(1<<EVENTO_INS_FIL)
+		;rcall	MSJ_Y_DELAY
+		;rjmp	main
+
+EVENTO5:
+; hace la resta de un valor (promediado) con el obtenido con filamento. Si vine acá es porque ya hay un valor CON filamento en ADC_PROMEDIO
+		CBR		eventos,	(1<<EVENTO_FILAMENTO)
+		rcall	MSJ_Y_COMPARACION
+		rjmp	main
 
 PROCESO_TRAMA_RX:
 		// Los datos recibidos x puerto serie están a partir del dirección RAM RX_BUF
@@ -195,25 +243,45 @@ PROCESO_TRAMA_RX:
 		clr		bytes_recibidos					; limpio nro. de bytes recibidos porque no lo uso
 
 		lds		t0, RX_BUF		; miro el 1er caracter de la trama recibida
-		cpi		t0, '1'
-		brne	VER_SI_ES_CERO
+		cpi		t0, 'h'
+		brne	VER_SI_MEDIR_O_VALOR_O_READY
 
-		sbi		PORT_LED, LED	; Si recibió un '1', prende el LED
-		rjmp	MAIN
+		rcall	HELP_TX
+		rjmp	main
+
+
+VER_SI_MEDIR_O_VALOR_O_READY:
+		cpi		t0,	'r'
+		brne	VER_SI_MEDIR_O_VALOR
+
+		sbrc	eventos,	EVENTO_M
+		SBR		eventos,	(1<<EVENTO_FILAMENTO)
+		sbrc	eventos,	EVENTO_V
+		rcall	DATO_TX
+
+		andi	eventos,	~((1<<EVENTO_M) | (1<<EVENTO_V))	; limpio esos bits
+		rjmp	main
+		
+VER_SI_MEDIR_O_VALOR:
+		rcall	MEDIR_O_VALOR
+		cpi		t0, 'm'
+		brne	VER_SI_VALOR
+		SBR		eventos,	(1<<EVENTO_M)
+		; no hace nada, vuelve al main, se va a medir y espera el ready
+		rjmp	main
+
+VER_SI_VALOR:
+		cpi		t0,	'v'
+		brne	main
+		SBR		eventos,	(1<<EVENTO_V)
+		; no hace nada, vuelve al main, se va a medir y espera el ready
+		rjmp	main
 
 LEER_ADC:
 		; Leen ADC y guardan el valor leído en ADC_B, ADC_B+1 y ADC_B+2
-		ldiw  Z, (MSJ_DATO<<1)
-		rcall TX_MSJ
-		ret
-
-VER_SI_ES_CERO:
-		cpi		t0, '0'
-		brne	MAIN
-
-		cbi		PORT_LED, LED	; Si recibe un '0', apaga el LED
-		rjmp	MAIN
-
+		;ldiw  Z, (MSJ_DATO<<1)
+		;rcall TX_MSJ
+		;ret
 
 ;-------------------------------------------------------------------------
 ;					COMUNICACION SERIE
@@ -378,26 +446,132 @@ sigue_tx:
 ; Recibe: nada
 ; Devuelve: nada
 ;-------------------------------------------------------------------------
+INTRODUCIR_FIL_TX:
+		pushw	Z
+		push	t0
+		PUSH	R0
+		PUSH	R1
+
+		ldiw	Z,(MSJ_INTR*2)
+		rcall	TX_MSJ
+
+		POP	R1
+		POP	R0
+		pop		t0
+		popw	Z
+		ret
+
 TEST_TX:
 		pushw	Z
 		push	t0
+		PUSH	R0
+		PUSH	R1
 
 		ldiw	Z,(MSJ_TEST_TX*2)
 		rcall	TX_MSJ
 
+		POP	R1
+		POP	R0
 		pop		t0
 		popw	Z
 		ret
+
+
+HUMEDO_TX:
+		pushw	Z
+		push	t0
+		PUSH	R0
+		PUSH	R1
+
+		ldiw	Z,(MSJ_HUMEDO*2)
+		rcall	TX_MSJ
+
+		POP	R1
+		POP	R0
+		pop		t0
+		popw	Z
+		ret
+
+		
+SECO_TX:
+		pushw	Z
+		push	t0
+		PUSH	R0
+		PUSH	R1
+
+		ldiw	Z,(MSJ_SECO*2)
+		rcall	TX_MSJ
+
+		POP	R1
+		POP	R0
+		pop		t0
+		popw	Z
+		ret
+
+DATO_TX:
+		pushw	Z
+		push	t0
+		PUSH	R0
+		PUSH	R1
+
+		ldiw	Z,(MSJ_DATO*2)
+		rcall	TX_MSJ
+
+		POP	R1
+		POP	R0
+		pop		t0
+		popw	Z
+		ret
+
+HELP_TX:
+		pushw	Z
+		push	t0
+		PUSH	R0
+		PUSH	R1
+
+		ldiw	Z,(HELP*2)
+		rcall	TX_MSJ
+
+		POP	R1
+		POP	R0
+		pop		t0
+		popw	Z
+		ret
+
+HELP:
+.db "h: ayuda; v: valor de medicion; m: humedad"
+.db		'\r','\n',0,0
+
 MSJ_DATO:
-.db "ADC= 0x%", low(ADC_B), high(ADC_B), " %", low(ADC_B+1), high(ADC_B+1)
-.db " %", low(ADC_B+2), high(ADC_B+2), '\n','\r',0,0
+.db "ADC= 0x%", low(ADC_PROMEDIO), high(ADC_PROMEDIO), " %", low(ADC_PROMEDIO+1), high(ADC_PROMEDIO+1)
+.db " %", low(ADC_PROMEDIO+2), high(ADC_PROMEDIO+2)
+.db " (", " %", low(ADC_VACIO), high(ADC_VACIO)
+.db " %", low(ADC_VACIO+1), high(ADC_VACIO+1), " )  "
+.db	'\r','\n',0,0
+
+.EQU	OFFSET	=	0*3
+
+MSJ_DATO_BUFFER:
+.db "ADC= 0x%", low(ADC_BUFFER+OFFSET), high(ADC_BUFFER+OFFSET), " %", low(ADC_BUFFER+OFFSET+1), high(ADC_BUFFER+1+OFFSET)
+.db " %", low(ADC_BUFFER+2+OFFSET), high(ADC_BUFFER+2+OFFSET)
+.db		'\r','\n',0,0
 
 MSJ_TEST_TX:
 ;.db	"Puerto Serie Version 0.3 ",'\r','\n',0
-.db		"Filamento proyecto %"
-.dw		VERSION		; dirección RAM de la variable (byte hexa) a tx
-.db		'\r','\n',0,0	; el 2do cero completa un nro. par de bytes
+.db		"Cargando"
+.db		'\r','\n',0,0	
 
+MSJ_INTR:
+.db		"Introduzca el filamento."
+.db		'\r','\n',0,0	
+
+MSJ_SECO:
+.db		"El filamento esta seco. Puede ser usado."
+.db	'\r','\n', 0,0	
+
+MSJ_HUMEDO:
+.db		"El filamento esta humedo. Secar con horno."
+.db	'\r','\n', 0,0	
 ;-------------------------------------------------------------------------
 ; TX_MSJ: transmite el mensaje almacenado en memoria flash a partir
 ; de la dirección que se pase en el puntero Z.   El mensaje debe termina 
@@ -411,6 +585,7 @@ TX_MSJ:
 			push	t0
 			pushi	SREG
 			pushw	X
+
 
 			movw	XL, ptr_tx_L	; toma el último valor del puntero
 
@@ -517,9 +692,13 @@ FIN_ISR:
 		POP	R17
 		POP	R16
 		RETI
+;----------------------------------------------------------------------------------------------------
 
 LEER_BITS:		
 
+		PUSH	R19
+		PUSH	R18
+		PUSH	R17
 		push	r16
 		
 		IN		R16,		SREG
@@ -528,18 +707,18 @@ LEER_BITS:
 		PUSH	R12
 		PUSH	R11
 		PUSH	R10
+		PUSHW	Y
 
 		push contador2
 
-		PUSH	YH
-		PUSH	YL	
 																;leo bits del puerto D bit 3 porque es donde esta conectado DT del AD
 
-		;debag
+		;debug
 
 		SBI		DDRC,  0
 
 		LDI		contador2,	24											;hay que mandar 24 pulsos para sacar 24 bits. DT NO VUELVE A 1
+
 
 
 
@@ -578,19 +757,27 @@ ESPERO_EN_BAJO_SCK:
 		DEC		contador2
 		BRNE	LOOP
 
-		;LDI		YH,			HIGH(ADC_B)									;inicializo puntero
-		;LDI		YL,			LOW(ADC_B)
+		LDI		YH,		HIGH(ADC_BUFFER)
+		LDI		YL,		LOW(ADC_BUFFER)
+		MOV		R16,	nro_veces
+		DEC		R16
+		LDI		R17,	3
+		MUL		R16,	R17
+		
+		ADD		YL,		R0
+		adc		yh,		R1
 
-		;MOV		R16,		R12
-		;CPI		R16,		0XFF
-		;BREQ	FIN
+		ST		Y+,		R12
+		ST		Y+,		R11
+		ST		Y+,		R10
 
-		STS		ADC_B,			R12
-		STS		ADC_B+1,			R11
-		STS		ADC_B+2,			R10
-FIN:
 
-		;mando 2 pulsos de clk pidiendo la siguiente conversion del canal b
+		DEC		nro_veces
+		BRNE	NO_AGOTO_BUFFER
+		;SBR		eventos,	(1<<EVENTO_PROMEDIAR)
+		LDI		nro_veces,		N_BUFFER 
+
+NO_AGOTO_BUFFER:
 
 		LDI		contador2,	2
 
@@ -620,9 +807,10 @@ ESPERO_EN_BAJO_SC:
 		ori		R16,	(1<<INT1)
 		out		EIMSK,	R16
 
-		POP		YL
-		POP		YH
+		SBR		eventos,	(1<<EVENTO_PROMEDIAR)		;se promedia cada vez que hay una nueva muestra
+
 		POP		contador2
+		POPW	Y
 		POP		R10
 		POP		R11
 		POP		R12
@@ -630,11 +818,103 @@ ESPERO_EN_BAJO_SC:
 
 		OUT		SREG,		R16
 		POP		R16
+		POP		R17
+		POP		R18
+		POP		R19
+
 
 		
 		RET
 
+PROMEDIAR_MUESTRAS:
+		; R3 | R2 | R1 | R0
+	
+		PUSHW	Y
+		PUSH	R0
+		PUSH	R1
+		PUSH	R2
+		PUSH	R3
+		PUSH	R16
+		IN		R16,		SREG
+		PUSH	R16
+		PUSH	R17
+		PUSH	R18
+		PUSH	R19
 
+		LDI		YH,			HIGH(ADC_BUFFER)									;pongo puntero en ADC_BUFFER que es primer byte de la suma
+		LDI		YL,			LOW(ADC_BUFFER)
+		LDI		R16,		N_BUFFER
+		CLR		R0
+		CLR		R1
+		CLR		R2
+		CLR		R3
+
+SUMAS_PARCIALES:
+		LD		R19,		Y+
+		LD		R18,		Y+
+		LD		R17,		Y+
+		ADD		R0,			R17		;sumo la parte baja
+		CLR		R17					;Importante: No modifica el Carry	
+		ADC		R1,			R17		;sumo carry a la parte alta
+		ADC		R2,			R17
+		ADC		R3,			R17
+		CLC
+		ADD		R1,			R18
+		CLR		R18
+		ADC		R2,			R18
+		ADC		R3,			R18
+		CLC
+		ADD		R2,			R19
+		CLR		R19
+		ADC		R3,			R19
+		CLC
+		DEC		R16
+		BRNE	SUMAS_PARCIALES
+
+		LDI		R16,		3
+DIVISION:
+		CLC
+		ROR		R3
+		ROR		R2
+		ROR		R1
+		ROR		R0
+		CLC
+		DEC		R16
+		BRNE	DIVISION
+
+
+		;LDI		R16,	8
+		STS		ADC_PROMEDIO,		R2
+		STS		ADC_PROMEDIO+1,		R1
+		STS		ADC_PROMEDIO+2,		R0
+		;LDI		R16,	IT_MEMORIA
+		;MOV		nro_veces,	R16
+		;LDI		YH,		HIGH(ADC_BUFFER)
+		;LDI		YL,		LOW(ADC_BUFFER)
+		;DEC		restan_para_introducir
+		;BRNE	NO_PASAR_A_FIL
+		;SBR		eventos,	(1<<EVENTO_INS_FIL)
+
+;NO_PASAR_A_FIL:
+;		mov		r16,	restan_para_introducir
+;		CPI		r16, IT_VACIO
+;		brne	NO_PRENDO_EVENTO
+;		SBR		eventos,	(1<<EVENTO_FILAMENTO)
+;NO_PRENDO_EVENTO:
+		POP		R19
+		POP		R18
+		POP		R17
+		POP		R16
+		OUT		SREG,	R16
+		POP		R16
+		POP		R3
+		POP		R2
+		POP		R1
+		POP		R0
+		POPW	Y
+		
+
+		RET
 
 INICIALIZAR_TIMER0:
 ;corre a 16 M/1024 = 15625 Hz (periodo = 64 micros) 
@@ -722,7 +1002,77 @@ INICIALIZAR_TIMER2:
 	STS		TCCR2A,		R25
 
 	RET
-	
+
+MEDIR_O_VALOR:
+	push	R16
+	lds		r16,	ADC_PROMEDIO+1
+	sts		ADC_VACIO,	r16
+	lds		r16,	ADC_PROMEDIO+2
+	sts		ADC_VACIO+1,r16
+	rcall	INTRODUCIR_FIL_TX
+	pop		R16
+	ret
+
+;MSJ_Y_DELAY:
+;	push	R16
+;	push	R17
+;	push	r18
+;	rcall	INTRODUCIR_FIL_TX
+;	rcall delay_15s
+;	ldi		r16,		IT_VACIO+1
+;	mov		restan_para_introducir, r16
+;	lds		r16,	ADC_PROMEDIO+1
+;	sts		ADC_VACIO,	r16
+;	lds		r16,	ADC_PROMEDIO+2
+;	sts		ADC_VACIO+1,r16
+;	pop		r18
+;	pop		R17
+;	pop		R16
+;	ret
+
+MSJ_Y_COMPARACION:
+	push	r16
+	in		r16,	sreg
+	push	r16
+	push	r17
+	push	r18
+	push	r19
+	push	r23
+	lds		r16,	ADC_PROMEDIO+1
+	lds		r17,	ADC_PROMEDIO+2 ; valores con filamento
+	lds		r18,	ADC_VACIO
+	lds		r19,	ADC_VACIO+1    ; valores en vacio
+	sub		r17,	r19
+	sbc		r16,	r18
+	brcs	esta_seco
+	cpi		r16,	UMBRAL
+	brlo	esta_seco
+	rcall	HUMEDO_TX
+	rjmp	esta_humedo
+esta_seco:
+	rcall	SECO_TX
+esta_humedo:
+	pop		r23
+	pop		r19
+	pop		r18
+	pop		r17
+	pop		r16
+	out		sreg,	r16
+	pop		r16
+	ret
+
+
+delay1:
+	ldi r18, 199
+delay0:
+	nop
+	dec r18
+	brne delay0
+	nop
+	dec r17
+	brne delay1
+ret
+
 ;-------------------------------------------------------------------------
 ; fin del código
 ;-------------------------------------------------------------------------;
